@@ -11,8 +11,9 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
     require(fields)
 
     varall <- names(envdata)[-1] # assume all columns of envdata will be used
-                                        # for modeling except first one
+                                # for modeling except first one
     varall_sd <- varall # define predictor variables that for SD
+
     ## drop xslope and pctshrb2019ws from SD computation
     ## because mean and SD for these variables are highly correlated
     dlist <- c("xslope")
@@ -22,21 +23,25 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
     tnames <- names(ss)[-1] # assume all columns of ss are taxon names
                                         #except for first one
 
-    ## ss to presence absence
+    ## convert ss to presence absence
     mat0 <- as.matrix(ss[, tnames])
     mat1 <- mat0 >0
     dim(mat1) <- dim(mat0)
     ss2 <- data.frame(ss[,1], mat1)
     names(ss2) <- c(sampid, tnames)
 
+    ## merge ss with envdata
     ss <- merge(ss2, envdata, by = sampid)
     cat("Number of samples:", nrow(ss), "\n")
 
+    ## output number of ASVs
     cat("Total number of asv:", sum(apply(ss[, tnames], 2, any)), "\n")
 
     ## get separation distance between samples
     dist0 <- rdist.earth(ss[, c("lon.dd83", "lat.dd83")], miles = F)
     diag(dist0) <- NA
+    ## these are commands to save dist0 to disk to reduce
+    ## computation when running the code repeatedly
 #   save(dist0, file = "dist0.rda")
 #    load("dist0.rda")
 
@@ -44,6 +49,7 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
     getenv <- function(isamp, ss) apply(ss[isamp,], 2, mean)
     getenv_sd <- function(isamp, ss) apply(ss[isamp,], 2, sd)
 
+    ## set random seed here
     set.seed(21)
     ## select subsample (1/10 of available data)
     nsub <- round(nrow(ss)/12)
@@ -66,9 +72,6 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
             maxdist[[k]][i] <- dist0[ipick[i],x[nsite]]
         }
     }
-
-#    print(table(table(isamp[[1]])))
-#    stop()
 
     ## uncomment to print example values of alpha, beta, gamma, and
     ## spatial grain size
@@ -103,21 +106,13 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
     alldat <- cbind(env.mn, env.mn_sd)
     print(ncol(alldat))
 
-#    ip <- which(apply(corout,2, function(x) any(abs(x)>0.8)))
-#    for (i in ip) {
-#        print(varp$var[i])
-#        incvec<- abs(corout[,i]) > 0.8
-#        print(varp$var[incvec])
-#        print("*")
-#    }
-#    stop()
-
     ## calculate median and range of each predictor variable
     mn0 <- apply(alldat, 2, median)
     r0 <- apply(alldat, 2, range)
 
     ## set up matrices of predictors in which only one variable varies
     ## across its range and the rest are set to median values
+    ## these matrices are used to compute partial dependence relationships
     mat0 <- rep(mn0, times = rep(np, times = length(mn0)))
     dim(mat0) <- c(np, length(mn0))
     dimnames(mat0)[[2]] <- names(mn0)
@@ -149,9 +144,11 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
         names0 <- dimnames(env.mn_sd)[[2]]
         dimnames(env.mn_sd)[[2]] <- paste(names0, "sd", sep = "_")
 
-#        beta <- apply(isamp0, 2, getbeta,ss= ss[, tnames])
+        ## uncomment below to get partial dependence relationships
+        ## for beta, alpha, or gamma
+        beta <- apply(isamp0, 2, getbeta,ss= ss[, tnames])
         ## subbing in alpha diversity
-        beta <-  apply(isamp0, 2, getalpha,ss= ss[, tnames])
+#        beta <-  apply(isamp0, 2, getalpha,ss= ss[, tnames])
         ## subbing in gamma
 #        beta <-  apply(isamp0, 2, getgamma,ss= ss[, tnames])
 
@@ -163,8 +160,7 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
                       num.trees = 2000) #mtry = round((ncol(alldat)-1)/2),
                     #  importance = "permutation")
 
-#        return(mod$variable.importance)
-#        return(mod$r.squared)
+        ## calculate partial dependence relationships
         partout <- matrix(NA, ncol = length(predmat), nrow = nrow(predmat[[1]]))
         for (i in 1:length(predmat)) {
             partout[,i] <- predict(mod, data = predmat[[i]])$predictions
@@ -172,10 +168,13 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
         attr(partout, "r2") <- mod$r.squared
         return(partout)
     }
-    ## single function call for testing
+
+    ## single function call for testing. uncomment to
+    ## test code before running in parallel over multiple processors
 #    getpartials(isamp[[1]], maxdist[[1]], ss, predmat, varall, tnames)
 
     if (runmod) {
+        ## set up to run on multiple cores. Here 15 are used
         plan(multisession, workers = 15)
         partout <- future_mapply(getpartials,isamp, maxdist,
                                  MoreArgs = list(ss = ss, predmat = predmat,
@@ -188,7 +187,7 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
         return(partout)
     }
     else {
-        ## do post processing
+        ## do post processing...make plots and calculate summary statistics
 
         ## example of land use relationships with mean and SD of environmental
         luenv <- F
@@ -213,12 +212,11 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
             plot(alldat[, "pctcrop2019ws"], log(alldat[, "ppt_sd"]), axes = T,
                  xlab = "% row crop", ylab = expression(SD~ln(N[diss])),
                  pch = 21, col = "grey39", bg = "white")
-            stop()
             dev.off()
             stop()
         }
 
-        ## example of subsampled sites in a map
+        ## show example of subsampled sites in a map
         mapexamp <- F
         if (mapexamp) {
             ## project locations
@@ -332,7 +330,7 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
                       "Catchment area", "Slope")
             names(lab0) <- root0
             print(lab0)
-
+            ## grp labels are the type of predictor
             grp <- c("C", "Q", "Q",
                      "Q", "T","A",
                      "A", "C", "Q",
@@ -473,7 +471,8 @@ random.beta <- function(ss, envdata, sampid, nit, runmod = T, partout = NULL) {
 }
 
 
-## set up ss and envdata data frames
+## this function sets up ss and envdata data frames from
+## raw data frames
 selvars <- function(ss, envdata, runmod) {
 
     varscat <- c(names(envdata)[53:136], "lat.dd83", "lon.dd83",
@@ -533,7 +532,7 @@ selvars <- function(ss, envdata, runmod) {
     print(summary(envdata$ntl.diss))
     envdata$wsareasqkm <- log(envdata$wsareasqkm)
 
-    incvec <- envdata1819$anc.result <= 0
+    incvec <- envdata$anc.result <= 0
     incvec[is.na(incvec)] <- F
     print(sum(incvec))
     minval <- min(envdata$anc.result[!incvec], na.rm = T)
